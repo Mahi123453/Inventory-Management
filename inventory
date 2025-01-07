@@ -1,0 +1,761 @@
+library(shiny)
+library(bslib)
+library(openxlsx)
+library(DT)
+library(plotly)
+library(RColorBrewer)
+library(bs4Dash)
+ui <- fluidPage(
+  # Logo and Title
+  tags$div(
+    style = "text-align: center;",
+    tags$img(src = "downlod.png", height = "100px"),
+    tags$h2("Operatins Inventory Management System"),
+    theme = bs_theme(version = 5)
+  ),
+  # Main panel with tabs
+  tabsetPanel(
+    tabPanel("Data Entry", 
+             sidebarLayout(
+               sidebarPanel(
+                 actionButton("save_data", "Save Data", class = "btn-success"),
+                 selectInput("cabinet", "Cabinet", 
+                             choices = c("Ready Stock", "Lab Assets", "Manufacture Equipment", "Manufacture Tools", "Installation Tools")),
+                 uiOutput("item_name_ui"),
+                 uiOutput("type_ui"),
+                 numericInput("quantity", "Quantity", value = 1, min = 1),
+                 actionButton("add_product", "Add Product", class = "btn-primary")
+               ),
+               mainPanel(
+                 textOutput("data_entry_status")
+               )
+             )
+    ),
+    
+    tabPanel("Dashboard",
+             actionButton("show_prepared_meters", 
+                          "Show Meters That Can Be Prepared", 
+                          class = "btn-danger", 
+                          style = "width: 400px; height: 100px; font-size: 20px;"),  # Adjust width, height, and font size as needed
+             textOutput("prepared_meters_status"),
+             uiOutput("inventory_boxes"),
+             DTOutput("dashboard_ready_stock_table"),
+             
+             # Additional outputs to show counts for each type of meter (optional)
+             textOutput("prepared_1_slot_count"),
+             textOutput("prepared_3_slot_count"),
+             textOutput("prepared_9_slot_count")
+    ),
+    
+    tabPanel("Ready Stock",
+             tabsetPanel(
+               tabPanel("Controls",
+                        textInput("employee_name", "Employee Name"),
+                        textInput("employee_card_no", "Employee Card No"),
+                        actionButton("delete_ready", "Delete Selected Row", class ="btn-danger"),
+                        actionButton("stock_in_ready", "Stock In", class ="btn-info"),
+                        actionButton("stock_out_ready", "Stock Out", class ="btn-warning"),
+                        actionButton("update_quantity_ready", "Update Quantity", class ="btn-primary"),
+                        downloadButton("download_csv_ready", "Download CSV"),
+                        downloadButton("download_excel_ready", "Download Excel"),
+                        downloadButton("download_csv_stock_out", "Download Stock Out CSV"),
+                        downloadButton("download_excel_stock_out", "Download Stock Out Excel")
+               ),
+               mainPanel(
+                 DTOutput("table_ready_stock")
+               )
+             )
+    ),
+    
+    tabPanel("Installation Tools",
+             tabsetPanel(
+               tabPanel("Controls",
+                        textInput("employee_name", "Employee Name"),
+                        textInput("employee_card_no", "Employee Card No"),
+                        actionButton("delete_lab", "Delete Selected Row", class ="btn-danger"),
+                        actionButton("stock_in_lab", "Stock In", class ="btn-info"),
+                        actionButton("stock_out_lab", "Stock Out", class ="btn-warning"),
+                        actionButton("update_quantity_lab", "Update Quantity", class ="btn-primary"),
+                        downloadButton("download_csv_lab", "Download CSV"),
+                        downloadButton("download_excel_lab", "Download Excel"),
+                        downloadButton("download_csv_stock_out", "Download Stock Out CSV"),
+                        downloadButton("download_excel_stock_out", "Download Stock Out Excel")
+               ),
+               mainPanel(
+                 DTOutput("table_lab_tools")
+               )
+             )
+    ),
+    tabPanel("Lab Assets",
+             tabsetPanel(
+               tabPanel("Controls",
+                        actionButton("delete_Lab", "Delete Selected Row", class ="btn-danger"),
+                        actionButton("stock_in_Lab", "Stock In", class ="btn-info"),
+                        actionButton("stock_out_Lab", "Stock Out", class ="btn-warning"),
+                        actionButton("update_quantity_Lab", "Update Quantity", class ="btn-primary"),
+                        downloadButton("download_csv_lab", "Download CSV"),
+                        downloadButton("download_exceL_lab", "Download Excel")
+               ),
+               mainPanel(
+                 DTOutput("table_Lab_Assets")
+               )
+             )
+    ),
+    
+    tabPanel("Manufacture Equipment",
+             tabsetPanel(
+               tabPanel("Controls",
+                        actionButton("delete_manufacture_equip", "Delete Selected Row", class ="btn-danger"),
+                        actionButton("stock_in_manufacture_equip", "Stock In", class ="btn-info"),
+                        actionButton("stock_out_manufacture_equip", "Stock Out", class ="btn-warning"),
+                        actionButton("update_quantity_manufacture_equip", "Update Quantity", class ="btn-primary"),
+                        downloadButton("download_csv_manufacture", "Download CSV"),
+                        downloadButton("download_excel_manufacture", "Download Excel")
+               ),
+               mainPanel(
+                 DTOutput("table_manufacture_equip")
+               )
+             )
+    ),
+    
+    tabPanel("Manufacture Tools",
+             tabsetPanel(
+               tabPanel("Controls",
+                        actionButton("delete_manufacture_tools", "Delete Selected Row", class ="btn-danger"),
+                        actionButton("stock_in_manufacture_tools", "Stock In", class ="btn-info"),
+                        actionButton("stock_out_manufacture_tools", "Stock Out", class ="btn-warning"),
+                        actionButton("update_quantity_manufacture_tools", "Update Quantity", class ="btn-primary"),
+                        downloadButton("download_csv_tools", "Download CSV"),
+                        downloadButton("download_excel_tools", "Download Excel")
+               ),
+               mainPanel(
+                 DTOutput("table_manufacture_tools")
+               )
+             )
+    )
+  )
+)
+
+# Define server logic
+server <- function(input, output, session) {
+  tables <- reactiveValues(
+    ready_stock = data.frame(Name = character(), Type = character(), Description = character(), Quantity = numeric(), stringsAsFactors = FALSE),
+    lab_tools = data.frame(Name = character(), Type = character(), Description = character(), Quantity = numeric(), stringsAsFactors = FALSE),
+    Lab_Assets = data.frame(Name = character(), Type = character(), Description = character(), Quantity = numeric(), stringsAsFactors = FALSE),
+    manufacture_equip = data.frame(Name = character(), Type = character(), Description = character(), Quantity = numeric(), stringsAsFactors = FALSE),
+    manufacture_tools = data.frame(Name = character(), Type = character(), Description = character(), Quantity = numeric(), stringsAsFactors = FALSE)
+  )
+  
+  # Reactive value to hold the count of prepared meters
+  prepared_meters_count <- reactiveVal(0)  # Initialize with 0
+  
+  # Load saved data on app start
+  observe({
+    if (file.exists("inventory_data.RData")) {
+      load("inventory_data.RData")
+      tables$ready_stock <- ready_stock
+      tables$lab_tools <- lab_tools
+      if (exists("Lab_Assets")) {
+        tables$Lab_Assets <- Lab_Assets
+      } else {
+        tables$Lab_Assets <- data.frame(Name = character(), Type = character(), Description = character(), Quantity = numeric(), stringsAsFactors = FALSE)
+        warning("Lab_Assets not found in the loaded data.")
+      }
+      tables$manufacture_equip <- manufacture_equip
+      tables$manufacture_tools <- manufacture_tools
+    }
+  })
+  
+  observeEvent(input$show_prepared_meters, {
+    # Initialize counts
+    prepared_count_1_slot <- Inf
+    prepared_count_3_slot <- Inf
+    prepared_count_9_slot <- Inf
+    missing_items_1_slot <- c()
+    missing_items_3_slot <- c()
+    missing_items_9_slot <- c()
+    
+    # Required items data frames
+    required_items_1_slot <- data.frame(
+      Name = c("Pzem", "PCB", "Power Module", "ESP", "SD Card Module", "Sd Card", 
+               "RTC", "RTC Cell", "Casing", "Connector", "Diode", "Resistor", 
+               "MOSFET", "PNP Transistor"),
+      Type = c("New", "1-slot", "-", "-", "-", "-", "-", "-", "1-slot", 
+               "3-Pin", "-", "120", "804", "3906"),
+      Minimum_Quantity = c(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
+    )
+    
+    required_items_3_slot <- data.frame(
+      Name = c("Pzem", "PCB", "Power Module", "ESP", "SD Card Module", "Sd Card", 
+               "RTC", "RTC Cell", "Casing", "Connector", "Diode", "Resistor", 
+               "MOSFET", "PNP Transistor"),
+      Type = c("New", "3-slot", "-", "-", "-", "-", "-", "-", "3-slot", 
+               "3-Pin", "-", "120", "804", "3906"),
+      Minimum_Quantity = c(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
+    )
+    
+    required_items_9_slot <- data.frame(
+      Name = c("Pzem", "PCB", "Power Module", "ESP", "SD Card Module", "Sd Card", 
+               "RTC", "RTC Cell", "Casing", "Connector", "Diode", "Resistor", 
+               "MOSFET", "PNP Transistor"),
+      Type = c("New", "9-slot", "-", "-", "-", "-", "-", "-", "9-slot", 
+               "3-Pin", "-", "120", "804", "3906"),
+      Minimum_Quantity = c(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
+    )
+    
+    # Function to count prepared meters
+    count_prepared_meters <- function(required_items, missing_items) {
+      prepared_count <- Inf
+      for (i in 1:nrow(required_items)) {
+        item_name <- required_items$Name[i]
+        item_type <- required_items$Type[i]
+        min_quantity <- required_items$Minimum_Quantity[i]
+        
+        # Filter matching rows from manufacture equipment
+        matching_rows <- tables$manufacture_equip[tables$manufacture_equip$Name == item_name & 
+                                                    (tables$manufacture_equip$Type == item_type | item_type == ""), ]
+        
+        # Check if the item is available
+        if (nrow(matching_rows) > 0) {
+          total_quantity <- sum(matching_rows$Quantity)
+          
+          # Calculate how many meters can be prepared based on this item
+          meters_for_item <- total_quantity %/% min_quantity
+          
+          # Update the prepared count to be the minimum across all items
+          prepared_count <- min(prepared_count, meters_for_item)
+        } else {
+          missing_items <- c(missing_items, item_name)  # Track missing item
+          prepared_count <- 0  # If any item is missing, no meters can be prepared
+        }
+      }
+      return(list(prepared_count = prepared_count, missing_items = missing_items))
+    }
+    
+    # Count prepared meters for each type
+    result_1_slot <- count_prepared_meters(required_items_1_slot, missing_items_1_slot)
+    prepared_count_1_slot <- result_1_slot$prepared_count
+    missing_items_1_slot <- result_1_slot$missing_items
+    
+    result_3_slot <- count_prepared_meters(required_items_3_slot, missing_items_3_slot)
+    prepared_count_3_slot <- result_3_slot$prepared_count
+    missing_items_3_slot <- result_3_slot$missing_items
+    
+    result_9_slot <- count_prepared_meters(required_items_9_slot, missing_items_9_slot)
+    prepared_count_9_slot <- result_9_slot$prepared_count
+    missing_items_9_slot <- result_9_slot$missing_items
+    
+    # After calculating prepared_count_1_slot, prepared_count_3_slot, and prepared_count_9_slot
+    
+    # Render status messages for each type of meter
+    output$prepared_1_slot_count <- renderText({
+      if (prepared_count_1_slot > 0) {
+        paste("1-slot meters that can be prepared:", prepared_count_1_slot)
+      } else {
+        missing_items_1_slot_msg <- if (length(missing_items_1_slot) > 0) {
+          paste("Missing items:", paste(missing_items_1_slot, collapse = ", "))
+        } else {
+          "Cannot prepare any 1-slot meters."
+        }
+        missing_items_1_slot_msg
+      }
+    })
+    
+    output$prepared_3_slot_count <- renderText({
+      if (prepared_count_3_slot > 0) {
+        paste("3-slot meters that can be prepared:", prepared_count_3_slot)
+      } else {
+        missing_items_3_slot_msg <- if (length(missing_items_3_slot) > 0) {
+          paste("Missing items:", paste(missing_items_3_slot, collapse = ", "))
+        } else {
+          "Cannot prepare any 3-slot meters."
+        }
+        missing_items_3_slot_msg
+      }
+    })
+    
+    output$prepared_9_slot_count <- renderText({
+      if (prepared_count_9_slot > 0) {
+        paste("9-slot meters that can be prepared:", prepared_count_9_slot)
+      } else {
+        missing_items_9_slot_msg <- if (length(missing_items_9_slot) > 0) {
+          paste("Missing items:", paste(missing_items_9_slot, collapse = ", "))
+        } else {
+          "Cannot prepare any 9-slot meters."
+        }
+        missing_items_9_slot_msg
+      }
+    })
+    
+    # Update the overall prepared meters count
+    total_prepared_meters <- prepared_count_1_slot + prepared_count_3_slot + prepared_count_9_slot
+    prepared_meters_count(total_prepared_meters)
+    
+    # Render the overall status message
+    output$prepared_meters_status <- renderText({
+      if (total_prepared_meters > 0) {
+        paste("Total meters that can be prepared:", total_prepared_meters)
+      } else {
+        "Cannot prepare any meters."
+      }
+    })
+  } ) 
+  output$item_name_ui <- renderUI({
+    req(input$cabinet)
+    # Dynamic item name selection based on cabinet
+    if (input$cabinet == "Ready Stock") {
+      selectInput("item_name", "Select Item Name", choices = c("Smart Meter", "CTs"))
+    } else if (input$cabinet == "Manufacture Tools") {
+      selectInput("item_name", "Select Item Name", choices = c("Soldering Wire", "Spacer", "Solder", "Acrylic Stand", "Allen KEY Set", "Amp Meter", "Bread Board", "Bulb", "Bulb Holder", "D-Link", "De-soldering Pump", "Drill Machine", "Drill Machine Cutter Blade kit", "File Set", "Gloves", "Glue Gun", "Hammer", "Lan Cable Connector Presser", "Hand Saw", "Lan to USB", "Nose Plier", "Paper Cutter", "Paper Cutter Blade", "PCB Holding Stang", "PCB Jumper Cutter", "Plier", "PCB Vero Board", "Pzem Address Device", "Screw Driver", "Screw Driver Kit Tester", "Small Screw Driver Kit", "SD Card Reader", "Solderinf Mat", "Soldering Iron", "Soldering Iron Stand", "Taster", "tweezers", "Soldering Stand", "Wrench"))
+    } else if (input$cabinet == "Manufacture Equipment") {
+      selectInput("item_name", "Select Item Name", choices = c("PNP Transistor", "Pzem", "PCB", "Power Module", "Casing", "Connector", "Diode", "IC", "Resistor", "Headers", "MOSFET", "ESP", "SD Card Module","Sd Card" ,"RTC", "RTC Cell", "Box Hook", "BOX", "Wire"))
+    } else if (input$cabinet == "Installation Tools") {
+      selectInput("item_name", "Select Item Name", choices = c("Breaker", "Connector", "Double Tape", "Flexible Pipe", "Home Plug", "Paper Tape", "Relays", "Wire"))
+    } else if (input$cabinet == "Lab Assets") {
+      selectInput("item_name", "Select Item Name", choices = c("Audio Plug on cable", "Data Logger", "CPU", "DB Box", "DB Panel", "Extensions", "HDMI", "Key Board Mouse", "Key Board Wired", "Mouse Wired", "LapTop", "LCD", "LCD Remote", "Power Cable", "Power Charger", "Printer Cable", "Socket Boxes", "Telephone Cable", "TinyTags"))
+    } else {
+      textInput("item_name", "Product Name", "")
+    }
+  })
+  
+  output$type_ui <- renderUI({
+    req(input$item_name)
+    # Dynamic type selection based on item name
+    if (input$cabinet == "Ready Stock") {
+      if (input$item_name == "Smart Meter") {
+        selectInput("type", "Select Type", choices = c("1-slot", "3-slot", "8-slot", "9-slot"))
+      } else if (input$item_name == "CTs") {
+        selectInput("type", "Select Type", choices = c("30A", "400/5A", "200/5A", "500A", "1000A", "1200/1A", "300/5A", "100A"))
+      }
+    } else if (input$cabinet == "Manufacture Tools") {
+      selectInput("type", "Select Type", choices = c("-", "Jazz 4G Devices"))
+    } else if (input$cabinet == "Manufacture Equipment") {
+      if (input$item_name == "Pzem") {
+        selectInput("type", "Select Type", choices = c("New", "Old"))
+      } else if (input$item_name == "PCB") {
+        selectInput("type", "Select Type", choices = c("1-slot", "3-slot", "8-slot", "9-slot", "LED"))
+      } else if (input$item_name == "PNP Transistor") {
+        selectInput("type", "Select Type", choices = c("3906"))
+      } else if (input$item_name %in% c("Power Module", "Diode", "ESP", "SD Card Module","Sd Card" ,"RTC", "RTC Cell", "Box Hook", "BOX")) {
+        selectInput("type", "Select Type", choices = c("-"))
+      } else if (input$item_name == "Casing") {
+        selectInput("type", "Select Type", choices = c("1-slot", "3-slot", "8-slot", "9-slot"))
+      } else if (input$item_name == "Connector") {
+        selectInput("type", "Select Type", choices = c("2-Pin", "3-Pin", "4-Pin", "5-pin", "6-Pin", "IC Base"))
+      } else if (input$item_name == "Resistor") {
+        selectInput("type", "Select Type", choices = c("120", "330", "1k", "6-8k"))
+      } else if (input$item_name == "IC") {
+        selectInput("type", "Select Type", choices = c("HLF-7404"))
+      } else if (input$item_name == "Header") {
+        selectInput("type", "Select Type", choices = c("Male", "Female", "Straight", "L-Shape"))
+      } else if (input$item_name == "MOSFET") {
+        selectInput("type", "Select Type", choices = c("804"))
+      } else if (input$item_name == "Wire") {
+        selectInput("type", "Select Type", choices = c("0.8mm", "6-pin jstxh", "2-pin jstxh", "4-pin jstxh"))
+      } else {
+        selectInput("type", "Select Type", choices = c("-"))
+      }
+    } else if (input$cabinet == "Installation Tools") {
+      if (input$item_name == "Breaker") {
+        selectInput("type", "Select Type", choices = c("1-Phase", "3-Phase"))
+      } else if (input$item_name == "Cable Tie") {
+        selectInput("type", "Select Type", choices = c("Large", "Small"))
+      } else if (input$item_name == "Connector") {
+        selectInput("type", "Select Type", choices = c("Lan Cable"))
+      } else if (input$item_name == "Flexible Pipe") {
+        selectInput("type", "Select Type", choices = c("Wire"))
+      } else if (input$item_name == "Relays") {
+        selectInput("type", "Select Type", choices = c("1-Phase", "3-Phase"))
+      } else if (input$item_name == "Wire") {
+        selectInput("type", "Select Type", choices = c("CT", "Lan Cable", "Supply"))
+      } else {
+        selectInput("type", "Select Type", choices = c("-"))
+      }
+    }
+  })
+  
+  # Add Product to the respective table
+  observeEvent(input$add_product, {
+    req(input$item_name, input$type, input$quantity)  # Ensure required inputs are not NULL or empty
+    
+    new_row <- data.frame(
+      Name = input$item_name,
+      Type = input$type,
+      Quantity = input$quantity,
+      stringsAsFactors = FALSE
+    )
+    
+    if (input$cabinet == "Ready Stock") {
+      tables$ready_stock <- rbind(tables$ready_stock, new_row)
+    } else if (input$cabinet == "Installation Tools") {
+      tables$iNSTALLATION_tools <- rbind(tables$lab_tools, new_row)
+    } else if (input$cabinet == "Lab Assets") {
+      tables$Lab_Assets <- rbind(tables$Lab_Assets, new_row)
+    } else if (input$cabinet == "Manufacture Equipment") {
+      tables$manufacture_equip <- rbind(tables$manufacture_equip, new_row)
+    } else if (input$cabinet == "Manufacture Tools") {
+      tables$manufacture_tools <- rbind(tables$manufacture_tools, new_row)
+    }
+    # Update the status message to include the item name and type
+    output$data_entry_status <- renderText({
+      paste("Product added:", input$item_name, "of type:", input$type, "to", input$cabinet)
+    })
+    # Clear the quantity input box
+    updateNumericInput(session, "quantity", value = 0)  # Reset to default or you can set it to 0
+  })
+  
+  
+  # Render tables
+  output$table_ready_stock <- renderDT({ tables$ready_stock }, selection = "multiple")
+  output$table_lab_tools <- renderDT({ tables$lab_tools }, selection = "multiple")
+  output$table_Lab_Assets <- renderDT({ tables$Lab_Assets }, selection = "multiple")
+  output$table_manufacture_equip <- renderDT({ tables$manufacture_equip }, selection = "multiple")
+  output$table_manufacture_tools <- renderDT({ tables$manufacture_tools }, selection = "multiple")
+  
+  output$inventory_boxes <- renderUI({
+    req(nrow(tables$ready_stock) > 0)
+    
+    # Aggregate quantities by type
+    output$inventory_boxes <- renderUI({
+      req(nrow(tables$ready_stock) > 0)
+      
+      # Aggregate quantities by type
+      aggregated_data <- aggregate(Quantity ~ Name + Type, 
+                                   data = tables$ready_stock[tables$ready_stock$Name %in% c("Smart Meter", "CTs"), ], 
+                                   FUN = sum)
+      
+      # Check if aggregation returns any rows
+      if (nrow(aggregated_data) == 0) {
+        return("No inventory data available.")
+      }
+      
+      # Define a vector of colors
+      color_options <- c("green", "red", "orange", "skyblue", "coral", "blue", 
+                         "lightseagreen", "salmon", "brown")
+      
+      # Define a vector of icons corresponding to item types
+      icon_options <- c("smart-meter" = "fa-lightbulb", "CT" = "fa-plug")  # Example mappings
+      
+      # Create a list to hold the final output
+      final_output <- lapply(unique(aggregated_data$Name), function(unique_name) {
+        item_data <- aggregated_data[aggregated_data$Name == unique_name, ]
+        
+        # Create a div for the unique name with a heading
+        name_div <- div(
+          h4(unique_name),  # Heading for the unique name
+          fluidRow(
+            lapply(1:nrow(item_data), function(i) {
+              color <- sample(color_options, 1)
+              icon_class <- icon_options[item_data$Type[i]]  # Mapping icon based on type
+              
+              # Create a box for each type associated with the unique name
+              div(
+                style = paste("background-color:", color, "; color: white; padding: 10px; margin: 3px; border-radius: 3px; display: inline-block; width: calc(20% - 5px);"),
+                tags$i(class = paste("fas", icon_class), style = "font-size: 30px;"),  # Icon
+                p(style = "font-size: 15px; font-weight: bold;", paste("Type:", item_data$Type[i])),
+                p(style = "font-size: 30px; font-weight: bold;", paste("Quantity:", item_data$Quantity[i]))
+              )
+            })
+          )
+        )
+        return(name_div)
+      })
+      
+      # Output the final structure
+      return(tagList(final_output))
+    })
+    # Output the final structure
+    return(tagList(final_output))
+  })
+  # Delete selected row from the Ready Stock table
+  observeEvent(input$delete_ready, {
+    selected <- input$table_ready_stock_rows_selected
+    if (length(selected) > 0) {
+      tables$ready_stock <- tables$ready_stock[-selected, ]
+      output$table_ready_stock <- renderDT({ tables$ready_stock }, selection = "multiple")
+    }
+  })
+  
+  # Repeat similar logic for other tables
+  observeEvent(input$delete_lab, {
+    selected <- input$table_lab_tools_rows_selected
+    if (length(selected) > 0) {
+      tables$lab_tools <- tables$lab_tools[-selected, ]
+      output$table_lab_tools <- renderDT({ tables$lab_tools }, selection = "multiple")
+    }
+  })
+  
+  observeEvent(input$delete_Lab, {
+    selected <- input$table_Lab_Assets_rows_selected
+    if (length(selected) > 0) {
+      tables$Lab_Assets <- tables$Lab_Assets[-selected, ]
+      output$table_Lab_Assets <- renderDT({ tables$Lab_Assets }, selection = "multiple")
+    }
+  })
+  
+  observeEvent(input$delete_manufacture_equip, {
+    selected <- input$table_manufacture_equip_rows_selected
+    if (length(selected) > 0) {
+      tables$manufacture_equip <- tables$manufacture_equip[-selected, ]
+      output$table_manufacture_equip <- renderDT({ tables$manufacture_equip }, selection = "multiple")
+    }
+  })
+  
+  observeEvent(input$delete_manufacture_tools, {
+    selected <- input$table_manufacture_tools_rows_selected
+    if (length(selected) > 0) {
+      tables$manufacture_tools <- tables$manufacture_tools[-selected, ]
+      output$table_manufacture_tools <- renderDT({ tables$manufacture_tools }, selection = "multiple")
+    }
+  })
+  
+  # Stock In (Increase Quantity)
+  observeEvent(input$stock_in_ready, {
+    selected <- input$table_ready_stock_rows_selected
+    if (length(selected) > 0) {
+      tables$ready_stock[selected, "Quantity"] <- tables$ready_stock[selected, "Quantity"] + 1
+      output$table_ready_stock <- renderDT({ tables$ready_stock }, selection = "multiple")
+    }
+  })
+  
+  observeEvent(input$stock_in_lab, {
+    selected <- input$table_lab_tools_rows_selected
+    if (length(selected) > 0) {
+      tables$lab_tools[selected, "Quantity"] <- tables$lab_tools[selected, "Quantity"] + 1
+      output$table_lab_tools <- renderDT({ tables$lab_tools }, selection = "multiple")
+    }
+  })
+  
+  observeEvent(input$stock_in_Lab, {
+    selected <- input$table_Lab_Assets_rows_selected
+    if (length(selected) > 0) {
+      tables$Lab_Assets[selected, "Quantity"] <- tables$Lab_Assets[selected, "Quantity"] + 1
+      output$table_Lab_Assets <- renderDT({ tables$Lab_Assets }, selection = "multiple")
+    }
+  })
+  observeEvent(input$stock_in_manufacture_equip, {
+    selected <- input$table_manufacture_equip_rows_selected
+    if (length(selected) > 0) {
+      tables$manufacture_equip[selected, "Quantity"] <- tables$manufacture_equip[selected, "Quantity"] + 1
+      output$table_manufacture_equip <- renderDT({ tables$manufacture_equip }, selection = "multiple")
+    }
+  })
+  
+  observeEvent(input$stock_in_manufacture_tools, {
+    selected <- input$table_manufacture_tools_rows_selected
+    if (length(selected) > 0) {
+      tables$manufacture_tools[selected, "Quantity"] <- tables$manufacture_tools[selected, "Quantity"] + 1
+      output$table_manufacture_tools <- renderDT({ tables$manufacture_tools }, selection = "multiple")
+    }
+  })
+  
+  # Add a reactive value to store stock out records
+  stock_out_records <- reactiveVal(data.frame(Employee_Name = character(), 
+                                              Employee_Card_No = character(), 
+                                              Item_Name = character(), 
+                                              Item_Type = character(), 
+                                              Quantity = numeric(), 
+                                              stringsAsFactors = FALSE))
+  
+  # Stock Out (Decrease Quantity)
+  observeEvent(input$stock_out_ready, {
+    selected <- input$table_ready_stock_rows_selected
+    if (length(selected) > 0) {
+      item_name <- tables$ready_stock[selected, "Name"]
+      item_type <- tables$ready_stock[selected, "Type"]
+      quantity_out <- 1  # Assuming 1 item is being taken out
+      
+      # Update the quantity in the table
+      tables$ready_stock[selected, "Quantity"] <- max(0, tables$ready_stock[selected, "Quantity"] - quantity_out)
+      output$table_ready_stock <- renderDT({ tables$ready_stock }, selection = "multiple")
+      
+      # Log the stock-out action
+      new_record <- data.frame(Employee_Name = input$employee_name,
+                               Employee_Card_No = input$employee_card_no,
+                               Item_Name = item_name,
+                               Item_Type = item_type,
+                               Quantity = quantity_out,
+                               stringsAsFactors = FALSE)
+      
+      stock_out_records(rbind(stock_out_records(), new_record))
+    }
+  })
+  
+  # Stock Out (Decrease Quantity)
+  observeEvent(input$stock_out_lab, {
+    selected <- input$table_labk_rows_selected
+    if (length(selected) > 0) {
+      item_name <- tables$lab[selected, "Name"]
+      item_type <- tables$lab[selected, "Type"]
+      quantity_out <- 1  # Assuming 1 item is being taken out
+      
+      # Update the quantity in the table
+      tables$lab[selected, "Quantity"] <- max(0, tables$lab[selected, "Quantity"] - quantity_out)
+      output$table_lab <- renderDT({ tables$lab }, selection = "multiple")
+      
+      # Log the stock-out action
+      new_record <- data.frame(Employee_Name = input$employee_name,
+                               Employee_Card_No = input$employee_card_no,
+                               Item_Name = item_name,
+                               Item_Type = item_type,
+                               Quantity = quantity_out,
+                               stringsAsFactors = FALSE)
+      
+      stock_out_records(rbind(stock_out_records(), new_record))
+    }
+  })
+  observeEvent(input$stock_out_Lab, {
+    selected <- input$table_Lab_Assets_rows_selected
+    if (length(selected) > 0) {
+      tables$Lab_Assets[selected, "Quantity"] <- max(0, tables$Lab_Assets[selected, "Quantity"] - 1)
+      output$table_Lab_Assets <- renderDT({ tables$Lab_Assets }, selection = "multiple")
+    }
+  })
+  
+  observeEvent(input$stock_out_manufacture_equip, {
+    selected <- input$table_manufacture_equip_rows_selected
+    if (length(selected) > 0) {
+      tables$manufacture_equip[selected, "Quantity"] <- max(0, tables$manufacture_equip[selected, "Quantity"] - 1)
+      output$table_manufacture_equip <- renderDT({ tables$manufacture_equip }, selection = "multiple")
+    }
+  })
+  
+  observeEvent(input$stock_out_manufacture_tools, {
+    selected <- input$table_manufacture_tools_rows_selected
+    if (length(selected) > 0) {
+      tables$manufacture_tools[selected, "Quantity"] <- max(0, tables$manufacture_tools[selected, "Quantity"] - 1)
+      output$table_manufacture_tools <- renderDT({ tables$manufacture_tools }, selection = "multiple")
+    }
+  })
+  
+  # Update Quantity
+  observeEvent(input$update_quantity_ready, {
+    selected <- input$table_ready_stock_rows_selected
+    if (length(selected) > 0 && !is.na(as.numeric(input$quantity))) {
+      tables$ready_stock[selected, "Quantity"] <- as.numeric(input$quantity)
+      output$table_ready_stock <- renderDT({ tables$ready_stock }, selection = "multiple")
+    }
+  })
+  
+  observeEvent(input$update_quantity_lab, {
+    selected <- input$table_lab_tools_rows_selected
+    if (length(selected) > 0 && !is.na(as.numeric(input$quantity))) {
+      tables$lab_tools[selected, "Quantity"] <- as.numeric(input$quantity)
+      output$table_lab_tools <- renderDT({ tables$lab_tools }, selection = "multiple")
+    }
+  })
+  
+  observeEvent(input$update_quantity_Lab, {
+    selected <- input$table_Lab_Assets_rows_selected
+    if (length(selected) > 0 && !is.na(as.numeric(input$quantity))) {
+      tables$Lab_Assets[selected, "Quantity"] <- as.numeric(input$quantity)
+      output$table_Lab_Assets <- renderDT({ tables$Lab_Assets }, selection = "multiple")
+    }
+  })
+  
+  observeEvent(input$update_quantity_manufacture_equip, {
+    selected <- input$table_manufacture_equip_rows_selected
+    if (length(selected) > 0 && !is.na(as.numeric(input$quantity))) {
+      tables$manufacture_equip[selected, "Quantity"] <- as.numeric(input$quantity)
+      output$table_manufacture_equip <- renderDT({ tables$manufacture_equip }, selection = "multiple")
+    }
+  })
+  
+  observeEvent(input$update_quantity_manufacture_tools, {
+    selected <- input$table_manufacture_tools_rows_selected
+    if (length(selected) > 0 && !is.na(as.numeric(input$quantity))) {
+      tables$manufacture_tools[selected, "Quantity"] <- as.numeric(input$quantity)
+      output$table_manufacture_tools <- renderDT({ tables$manufacture_tools }, selection = "multiple")
+    }
+  })
+  # Download Handlers for CSV and Excel for Ready Stock
+  output$download_csv_ready <- downloadHandler(
+    filename = function() { "Ready_Stock.csv" },
+    content = function(file) { write.csv(tables$ready_stock, file, row.names = FALSE) }
+  )
+  
+  output$download_excel_ready <- downloadHandler(
+    filename = function() { "Ready_Stock.xlsx" },
+    content = function(file) { write.xlsx(tables$ready_stock, file) }
+  )
+  
+  # Download Handlers for Stock Out Records
+  output$download_csv_stock_out <- downloadHandler(
+    filename = function() { "Stock_Out_Records.csv" },
+    content = function(file) { write.csv(stock_out_records(), file, row.names = FALSE) }
+  )
+  
+  output$download_excel_stock_out <- downloadHandler(
+    filename = function() { "Stock_Out_Records.xlsx" },
+    content = function(file) { write.xlsx(stock_out_records(), file) }
+  )
+  
+  # Download Handlers for Lab Tools
+  output$download_csv_lab <- downloadHandler(
+    filename = function() { "Lab_Tools.csv" },
+    content = function(file) { write.csv(tables$lab_tools, file, row.names = FALSE) }
+  )
+  
+  output$download_excel_lab <- downloadHandler(
+    filename = function() { "Lab_Tools.xlsx" },
+    content = function(file) { write.xlsx(tables$lab_tools, file) }
+  )
+  
+  # Additional Download Handlers for Stock Out Records under Lab Tools
+  output$download_csv_lab_stock_out <- downloadHandler(
+    filename = function() { "Lab_Tools_Stock_Out_Records.csv" },
+    content = function(file) { write.csv(stock_out_records(), file, row.names = FALSE) }
+  )
+  
+  output$download_excel_lab_stock_out <- downloadHandler(
+    filename = function() { "Lab_Tools_Stock_Out_Records.xlsx" },
+    content = function(file) { write.xlsx(stock_out_records(), file) }
+  )
+  
+  # Download Handlers for CSV and Excel for Lab Assets
+  output$download_csv_Lab_Assets <- downloadHandler(
+    filename = function() { "Lab_Assets.csv" },
+    content = function(file) { write.csv(tables$Lab_Assets, file, row.names = FALSE) }
+  )
+  
+  output$download_excel_Lab_Assets <- downloadHandler(
+    filename = function() { "Lab_Assets.xlsx" },
+    content = function(file) { write.xlsx(tables$Lab_Assets, file) }
+  )
+  
+  # Download Handlers for Manufacture Equipment
+  output$download_csv_manufacture <- downloadHandler(
+    filename = function() { "Manufacture_Equipment.csv" },
+    content = function(file) { write.csv(tables$manufacture_equip, file, row.names = FALSE) }
+  )
+  
+  output$download_excel_manufacture <- downloadHandler(
+    filename = function() { "Manufacture_Equipment.xlsx" },
+    content = function(file) { write.xlsx(tables$manufacture_equip, file) }
+  )
+  
+  # Download Handlers for Manufacture Tools
+  output$download_csv_tools <- downloadHandler(
+    filename = function() { "Manufacture_Tools.csv" },
+    content = function(file) { write.csv(tables$manufacture_tools, file, row.names = FALSE) }
+  )
+  
+  output$download_excel_tools <- downloadHandler(
+    filename = function() { "Manufacture_Tools.xlsx" },
+    content = function(file) { write.xlsx(tables$manufacture_tools, file) }
+  )
+  
+  
+  # Save data on Save Data button click
+  observeEvent(input$save_data, {
+    ready_stock <- tables$ready_stock
+    lab_tools <- tables$lab_tools
+    Lab_Assets <- tables$Lab_Assets
+    manufacture_equip <- tables$manufacture_equip
+    manufacture_tools <- tables$manufacture_tools
+    save(ready_stock, lab_tools,Lab_Assets, manufacture_equip, manufacture_tools, file = "inventory_data.RData")
+    showNotification("Data saved successfully!", type = "message")
+  })
+}
+# Run the app
+shinyApp(ui, server)
